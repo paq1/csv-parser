@@ -2,7 +2,6 @@ package schemas
 
 import shapeless._
 import shapeless.labelled._
-import scala.util.Try
 
 
 trait Schema[T] {
@@ -11,7 +10,16 @@ trait Schema[T] {
 
 object Schema {
 
-  def apply[T](implicit schema: Schema[T]): Schema[T] = schema
+  implicit val intSchema: Schema[Int] = new Schema[Int] {
+    override def parse(row: Map[String, String]): Either[String, Int] = Left("int n'est pas un objet")
+  }
+
+  implicit val hlistSchema: Schema[HList] = new Schema[HList] {
+    override def parse(row: Map[String, String]): Either[String, HList] = {
+      Left("hlist imposible a parser")
+    }
+  }
+
 
   implicit def genericSchema[T, Repr <: HList](
                                                 implicit gen: LabelledGeneric.Aux[T, Repr],
