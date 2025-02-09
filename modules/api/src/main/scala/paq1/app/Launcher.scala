@@ -19,71 +19,112 @@ object Chien {
   implicit val objectDesc: ObjectDesc[Chien] = ObjectDesc(
     fields = List(
       FieldDesc("nom", "String"),
-      FieldDesc("age", "Double"),
+      FieldDesc("age", "Double")
     )
   )
 }
 
+case class FieldDesc(
+    name: String,
+    fieldType: String
+)
 
-case class FieldDesc(name: String, fieldType: String) // todo : passer par un trait / enum pour le type
-case class ObjectDesc[T](fields: List[FieldDesc]) {
+object FieldsExtractor {
+  def fields[P <: Product, L <: HList, R <: HList](a: P)(implicit
+      gen: LabelledGeneric.Aux[P, L],
+      keys: Keys.Aux[L, R],
+      list: ToTraversable.Aux[R, List, Symbol],
+      typeable: Typeable[P]
+  ): List[(String, String)] = {
+    val fieldNames = keys().toList.map(_.name)
+    println(keys().toList)
 
-  def fromValueTiHlist(list: List[String])(implicit label: LabelledGeneric[T]): Either[Throwable, label.Repr] = {
-
-    if (list.length != fields.length) {
-      return Left(new Exception("500 - le schema ne correspond pas"))
-    }
-
-    val keyValueString: List[(FieldDesc, String)] = fields.zip(list)
-
-    keyValueString.reverse.foldLeft[Either[Throwable, HList]](Right(HNil)) { (acc, current) =>
-      acc.flatMap { currentHlist =>
-        Try {
-          val field = Symbol(current._1.name)
-          val typeFieldsStr = current._1.fieldType
-          val hlist: Either[Throwable, HList] = typeFieldsStr match {
-            case "String" => {
-              val value = field ->> current._2
-              Right(value :: currentHlist)
-            }
-            case "Double" => {
-              val value = field ->> current._2.toDouble
-              Right(value :: currentHlist)
-            }
-            case _ => Left(new Exception(s"type $typeFieldsStr non prit en compte"))
-          }
-          hlist
-        }.toEither.flatten
-      }
-    }.map(d => d.asInstanceOf[label.Repr])
-
+//    val fieldType = keys().toList.map(_.name)
+    val values = a.productIterator.toList.map(_.toString)
+    fieldNames zip values
   }
-
 }
 
+object Builder {
+  import shapeless.{Generic, HList}
+  import shapeless.ops.function.FnToProduct
+  import shapeless.ops.traversable.FromTraversable
+
+  // cc is used only to infer types, constructor is used
+  def fill[F, L <: HList, R](
+      cc: F,
+      values: List[_]
+  )(implicit
+      fnToProduct: FnToProduct.Aux[F, L => R],
+      fromTraversable: FromTraversable[L]
+  ): R = fnToProduct(cc)(fromTraversable(values).get)
+}
+
+case class ObjectDesc[T: ClassTag](fields: List[FieldDesc]) {
+  def fromValuesToT(values: List[String]): Either[Throwable, List[Any]] = {
+    for {
+      _ <- checkCanCombined(values)
+      schemaWithValues = unsafeZipData(values)
+      parsedValues <- parseValues(schemaWithValues)
+//      result <- fromParsedValuesToT(parsedValues)
+    } yield { parsedValues }
+  }
+
+  private def fromParsedValuesToT(values: List[Any]): Either[Throwable, T] = {
+    Left(new Exception("fromParsedValuesToT - Not implemented"))
+  }
+
+  private def parseValues(
+      fieldsAndValues: List[(FieldDesc, String)]
+  ): Either[Throwable, List[Any]] = {
+
+    fieldsAndValues.reverse.foldLeft[Either[Throwable, List[Any]]](Right(List.empty[Any])) { (acc, current) =>
+      acc.flatMap { values =>
+        val (fieldDescription, strValue) = current
+
+        (fieldDescription.fieldType match {
+          case "String" => Right(strValue)
+          case "Double" =>
+            Try {
+              strValue.toDouble
+            }.toEither
+          case _ =>
+            Left(
+              new Exception(s"type : ${fieldDescription.fieldType} can't be parsed for the moment")
+            )
+        }).map { parsed =>
+          parsed :: values
+        }
+      }
+    }
+  }
+
+  private def unsafeZipData(values: List[String]): List[(FieldDesc, String)] =
+    fields zip values
+
+  private def checkCanCombined(
+      values: List[String]
+  ): Either[Throwable, Unit] = {
+    if (values.length == fields.length) {
+      Right(())
+    } else {
+      Left(new Exception("schema non comforme"))
+    }
+  }
+}
 
 object Launcher extends App {
 
-  def parse[T](
-    l : List[String]
-  )(
-    implicit sc: ObjectDesc[T],
-    label: LabelledGeneric[T]
-  ): Either[String, T] = {
-    val maybeHlist: Either[Throwable, label.Repr] = sc.fromValueTiHlist(l)
-    println(maybeHlist.left.map(_ => "pouet"))
+  val c = Builder.fill(Chien.apply _, List("foo", 4.2))
 
-    maybeHlist match {
-      case Left(value) => Left("err")
-      case Right(value) => Right(label.from(value))
-    }
-    Left("Not implemented")
-  }
+  val info = FieldsExtractor.fields(c)
+  println(info)
+  println(c)
 
-
-//  transform()
-  val result = parse[Chien](List("toto", "5.4"))
-  println(result)
+  val chienMapped: Either[Throwable, List[Any]] = Chien.objectDesc.fromValuesToT(List("a", "12.0"))
+  println(chienMapped)
+  val chien = chienMapped.map(fields => Builder.fill(Chien.apply _, fields))
+  println(chien)
 
   def transform(): Unit = {
     val value1 = Symbol("nom") ->> "a"
@@ -96,5 +137,3 @@ object Launcher extends App {
   }
 
 }
-
-
