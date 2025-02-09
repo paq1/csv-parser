@@ -1,53 +1,39 @@
 package schemas
 
-import shapeless._
-import shapeless.labelled._
-
-
 trait Schema[T] {
-  def parse(row: Map[String, String]): Either[String, T]
+  def predicates: List[Predicate[_]]
+  def fromStringToAnyValues(strValues: List[String]): Either[Throwable, List[Any]]
 }
 
-object Schema {
+case class ImplSchema[T](predicates: List[Predicate[_]]) extends Schema[T] {
 
-  implicit val intSchema: Schema[Int] = new Schema[Int] {
-    override def parse(row: Map[String, String]): Either[String, Int] = Left("int n'est pas un objet")
+  override def fromStringToAnyValues(strValues: List[String]): Either[Throwable, List[Any]] = {
+    for {
+      _ <- canZip(strValues)
+      zipped = predicates.zip(strValues)
+      result <- toValues(zipped)
+    } yield result
   }
 
-  implicit val hlistSchema: Schema[HList] = new Schema[HList] {
-    override def parse(row: Map[String, String]): Either[String, HList] = {
-      Left("hlist imposible a parser")
+  private def toValues(zipped: List[(Predicate[_], String)]): Either[Throwable, List[Any]] = {
+    zipped.reverse.foldLeft[Either[Throwable, List[Any]]](Right(List.empty[Any])) { (acc, current) =>
+      acc.flatMap { values =>
+        val (predicate, strValue) = current
+
+        predicate
+          .parse(strValue).left.map(err => new Exception(err))
+          .map { value =>
+            value :: values
+          }
+      }
     }
   }
 
-
-  implicit def genericSchema[T, Repr <: HList](
-                                                implicit gen: LabelledGeneric.Aux[T, Repr],
-                                                reprSchema: Lazy[Schema[Repr]]
-                                              ): Schema[T] = new Schema[T] {
-    override def parse(row: Map[String, String]): Either[String, T] = reprSchema.value.parse(row).map(gen.from)
-  }
-
-  implicit def hnilSchema: Schema[HNil] = new Schema[HNil] {
-    override def parse(row: Map[String, String]): Either[String, HNil] = Right(HNil)
-  }
-
-
-  // Cas récursif pour `HList` (head :: tail)
-  implicit def hconsSchema[K <: Symbol, V, Tail <: HList](implicit
-                                                          key: Witness.Aux[K],
-                                                          pred: Predicate[V],
-                                                          tailSchema: Lazy[Schema[Tail]]
-                                                         ): Schema[FieldType[K, V] :: Tail] = new Schema[FieldType[K, V] :: Tail] {
-    override def parse(row: Map[String, String]): Either[String, FieldType[K, V] :: Tail] = {
-      val headValue: Either[String, V] = pred.parse(row.get(key.value.name)) // Utiliser le nom du champ via Witness
-      val tailValue: Either[String, Tail] = tailSchema.value.parse(row)
-      for {
-        head <- headValue
-        tail <- tailValue
-      } yield {
-        field[K](head) :: tail
-      }
+  private def canZip(values: List[_]): Either[Throwable, Unit] = {
+    if (values.length != predicates.length) {
+      Left(new Exception("le nombre de valeur est incompatible"))
+    } else {
+      Right(())
     }
   }
 
